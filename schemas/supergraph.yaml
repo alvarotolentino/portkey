@@ -1,0 +1,9 @@
+subgraphs:
+  service_1:
+    routing_url: http://localhost:4001/graphql
+    schema:
+      file: ../service_1.graphql
+  service_2:
+    routing_url: http://localhost:4002/graphql
+    schema:
+      file: ../service_2.graphql

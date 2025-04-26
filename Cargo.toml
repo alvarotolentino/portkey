@@ -1,0 +1,26 @@
+[package]
+name = "portkey"
+version = "0.1.0"
+edition = "2024"
+authors = ["Alvaro Tolentino <alvarotolentinou@gmail.com>"]
+license = "GPL-3.0"
+description = "A graphql federate gateway service for Rust"
+readme = "README.md"
+
+[dependencies]
+# Async runtime
+async-trait = "0.1"
+tokio = { version = "1.28", features = ["full"] }
+futures = "0.3"
+# web framework
+warp = "0.3"
+reqwest = { version = "0.11", features = ["json"] }
+# GraphQL parser
+graphql-parser = "0.4.1"
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Configuration
+clap = { version = "4.4", features = ["derive"] }
