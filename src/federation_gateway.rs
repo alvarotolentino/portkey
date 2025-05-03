@@ -43,18 +43,17 @@ impl FederationGateway {
     }
 
     pub async fn process_request(&self, request: GraphQLRequest) -> Result<Value, String> {
-        // Get the federated schema
+        println!("Processing request: {:?}", request);
+
         let schema_registry = self.schema_registry.read().await;
         let schema = schema_registry.get_schema().await?;
         drop(schema_registry);
 
-        // Plan the query
         let query_plan = self
             .query_planner
-            .plan_query(&request.query, &schema)
+            .plan_query(&request.query, &schema, request.variables)
             .await?;
 
-        // Execute the plan
         let response = self
             .query_executor
             .execute_plan(query_plan, &schema)
@@ -69,22 +68,19 @@ impl FederationGateway {
     }
 
     pub async fn load_schemas(&self) -> Result<(), String> {
-        let config_path = Path::new("schemas/supergraph.yaml");
+        let config_path = Path::new("./schemas/supergraph.yaml");
         let config_dir = config_path.parent().unwrap_or_else(|| Path::new(""));
+        println!("Config path: {:?}", config_path);
 
-        // Read and parse the YAML configuration
         let config_contents = fs::read_to_string(config_path)
             .map_err(|e| format!("Failed to read config file: {}", e))?;
         let config: SupergraphConfig = serde_yaml::from_str(&config_contents)
             .map_err(|e| format!("Failed to parse config file: {}", e))?;
 
-        // Register services from the configuration
         for (name, subgraph_config) in config.subgraphs {
-            // Read the schema file
             let schema_content = read_schema_file(config_dir, &subgraph_config.schema.file)
                 .map_err(|e| format!("Failed to read schema file: {}", e))?;
 
-            // Create and register the service
             let service_config = ServiceConfig {
                 name,
                 url: subgraph_config.routing_url,
@@ -95,11 +91,10 @@ impl FederationGateway {
         }
         Ok(())
     }
-
-    // Function to read a GraphQL schema file
 }
 
 fn read_schema_file(base_dir: &Path, file_path: &str) -> io::Result<String> {
     let full_path = base_dir.join(file_path);
+    println!("Reading schema file: {:?}", full_path);
     fs::read_to_string(full_path)
 }

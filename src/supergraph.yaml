@@ -1,7 +1,0 @@
-subgraphs:
-  account_service:
-    routing_url: http://localhost:4001/graphql
-    schema: ../schemas/account_service.graphql
-  products:
-    routing_url: http://localhost:4002/graphql
-    schema: ../schemas/products.graphql

@@ -1,11 +1,11 @@
 use async_trait::async_trait;
-use futures::future::join_all;
+use futures::{FutureExt, future::try_join_all};
 use serde_json::{Value, json};
 
 use crate::{FederatedSchema, QueryPlan};
 
 #[async_trait]
-pub trait QueryExecutor {
+pub trait QueryExecutor: Send + Sync {
     async fn execute_plan(
         &self,
         plan: QueryPlan,
@@ -13,15 +13,11 @@ pub trait QueryExecutor {
     ) -> Result<Value, String>;
 }
 
-pub struct HttpQueryExecutor {
-    client: reqwest::Client,
-}
+pub struct HttpQueryExecutor {}
 
 impl HttpQueryExecutor {
     pub fn new() -> Self {
-        HttpQueryExecutor {
-            client: reqwest::Client::new(),
-        }
+        HttpQueryExecutor {}
     }
 }
 
@@ -29,115 +25,98 @@ impl HttpQueryExecutor {
 impl QueryExecutor for HttpQueryExecutor {
     async fn execute_plan(
         &self,
-        plan: QueryPlan,
+        query_plan: QueryPlan,
         schema: &FederatedSchema,
     ) -> Result<Value, String> {
-        // List of futures for parallel execution
-        let mut futures = Vec::new();
+        let client = reqwest::Client::new();
 
-        // Create a future for each service query
-        for (service_name, query) in plan.service_queries {
-            if let Some(service) = schema.services.get(&service_name) {
-                let client = self.client.clone();
-                let service_url = service.url.clone();
-                let query_clone = query.clone();
-
-                // Create a future for this service call
-                let future = async move {
-                    let request_body = json!({
-                        "query": query_clone,
-                        "variables": {}
-                    });
-
-                    let response = client
-                        .post(&service_url)
-                        .header("Content-Type", "application/json")
-                        .json(&request_body)
-                        .send()
-                        .await
-                        .map_err(|e| {
-                            format!("Failed to send request to {}: {}", service_name, e)
-                        })?;
-
-                    let json_response = response.json::<Value>().await.map_err(|e| {
-                        format!("Failed to parse response from {}: {}", service_name, e)
-                    })?;
-
-                    Ok::<(String, Value), String>((service_name, json_response))
+        let futures = query_plan
+            .service_queries
+            .into_iter()
+            .map(|(service_name, query)| {
+                let service = match schema.services.get(&service_name) {
+                    Some(service) => service,
+                    None => {
+                        return futures::future::ready(Err(format!(
+                            "Service not found: {}",
+                            service_name
+                        )))
+                        .left_future();
+                    }
                 };
 
-                futures.push(future);
-            }
-        }
+                let variables = query_plan
+                    .service_variables
+                    .get(&service_name)
+                    .cloned()
+                    .unwrap_or(json!({}));
 
-        // Execute all service calls in parallel
-        let results = join_all(futures).await;
+                println!("Executing query for service: {}", service_name);
+                println!("Query: {}", query);
+                println!("Variables for service: {}", variables);
 
-        // Merge results
-        let mut merged_data = json!({});
+                let request = client
+                    .post(&service.url)
+                    .json(&json!({
+                        "query": query,
+                        "variables": variables
+                    }))
+                    .send();
 
-        for result in results {
-            match result {
-                Ok((service_name, response)) => {
-                    // Extract data from response
-                    if let Some(data) = response.get("data") {
-                        if let Value::Object(fields) = data {
-                            for (key, value) in fields {
-                                if let Value::Object(ref mut merged_obj) = merged_data["data"] {
-                                    merged_obj.insert(key.clone(), value.clone());
-                                } else {
-                                    merged_data["data"] = json!({ key: value });
-                                }
-                            }
-                        }
+                async move {
+                    let response = request
+                        .await
+                        .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+                    if !response.status().is_success() {
+                        let status = response.status();
+                        let error_text = response
+                            .text()
+                            .await
+                            .unwrap_or_else(|_| "Could not read error response".to_string());
+                        return Err(format!("Service returned error {}: {}", status, error_text));
                     }
 
-                    // Handle errors
-                    if let Some(errors) = response.get("errors") {
-                        if let Value::Array(error_list) = errors {
-                            if !error_list.is_empty() {
-                                // Add service name to errors for debugging
-                                let mut service_errors = error_list.clone();
-                                for error in &mut service_errors {
-                                    if let Value::Object(error_obj) = error {
-                                        error_obj.insert(
-                                            "service".to_string(),
-                                            Value::String(service_name.clone()),
-                                        );
-                                    }
-                                }
+                    let response_json = response
+                        .json::<Value>()
+                        .await
+                        .map_err(|e| format!("Failed to parse response: {}", e))?;
 
-                                // Add to merged errors
-                                if let Some(Value::Array(merged_errors)) =
-                                    merged_data.get_mut("errors")
-                                {
-                                    merged_errors.extend(service_errors);
-                                } else {
-                                    merged_data["errors"] = Value::Array(service_errors);
-                                }
-                            }
-                        }
+                    if let Some(errors) = response_json.get("errors") {
+                        println!(
+                            "Service {} returned GraphQL errors: {}",
+                            service_name, errors
+                        );
                     }
+
+                    Ok((service_name, response_json))
                 }
-                Err(e) => {
-                    // Add execution error
-                    let error = json!({
-                        "message": format!("Execution error: {}", e)
-                    });
+                .right_future()
+            });
 
-                    let merged_data_obj = merged_data.as_object_mut().unwrap();
-                    if let Some(errors) = merged_data_obj
-                        .get_mut("errors")
-                        .and_then(|v| v.as_array_mut())
-                    {
-                        errors.push(error);
-                    } else {
-                        merged_data_obj.insert("errors".to_string(), Value::Array(vec![error]));
-                    }
+        let results = try_join_all(futures).await?;
+
+        let mut data_map = serde_json::Map::new();
+        let mut all_errors = Vec::new();
+
+        for (_service_name, result) in results {
+            if let Some(data) = result.get("data").and_then(Value::as_object) {
+                data_map.extend(data.clone());
+            }
+
+            if let Some(errors) = result.get("errors").and_then(Value::as_array) {
+                for error in errors {
+                    all_errors.push(error.clone());
                 }
             }
         }
 
-        Ok(merged_data)
+        let mut response = json!({"data": data_map});
+
+        if !all_errors.is_empty() {
+            response["errors"] = Value::Array(all_errors);
+        }
+
+        Ok(response)
     }
 }

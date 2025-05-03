@@ -10,10 +10,8 @@ use crate::{FederatedSchema, ServiceConfig, ServiceMap};
 pub trait SchemaRegistry {
     async fn register_service(&mut self, service: ServiceConfig) -> Result<(), String>;
     async fn get_schema(&self) -> Result<FederatedSchema, String>;
-    async fn refresh_schemas(&mut self) -> Result<(), String>;
 }
 
-// Implementation of our SchemaRegistry
 pub struct InMemorySchemaRegistry {
     services: Arc<RwLock<ServiceMap>>,
     federated_schema: Arc<RwLock<Option<FederatedSchema>>>,
@@ -33,44 +31,79 @@ impl InMemorySchemaRegistry {
     ) -> Result<FederatedSchema, String> {
         let mut type_to_service_map = HashMap::new();
 
-        // Extract types from each schema and map them to their services
         for (service_name, service_config) in services {
-            // Parse schema
             let schema_document = parse_schema::<String>(&service_config.schema).map_err(|e| {
                 format!("Failed to parse schema for service {}: {}", service_name, e)
             })?;
 
-            // Extract type names from schema
             for definition in &schema_document.definitions {
                 if let graphql_parser::schema::Definition::TypeDefinition(typedef) = definition {
-                    let type_name = match typedef {
-                        graphql_parser::schema::TypeDefinition::Object(obj) => obj.name.clone(),
+                    match typedef {
+                        graphql_parser::schema::TypeDefinition::Object(obj) => {
+                            let type_name = obj.name.clone();
+                            type_to_service_map
+                                .entry(type_name.clone())
+                                .or_insert_with(Vec::new)
+                                .push(service_name.clone());
+
+                            for field in &obj.fields {
+                                let field_key = format!("{}.{}", type_name, field.name);
+                                type_to_service_map
+                                    .entry(field_key)
+                                    .or_insert_with(Vec::new)
+                                    .push(service_name.clone());
+
+                                for arg in &field.arguments {
+                                    let arg_key =
+                                        format!("{}.{}.{}", type_name, field.name, arg.name);
+                                    type_to_service_map
+                                        .entry(arg_key)
+                                        .or_insert_with(Vec::new)
+                                        .push(service_name.clone());
+                                }
+                            }
+                        }
                         graphql_parser::schema::TypeDefinition::Interface(iface) => {
-                            iface.name.clone()
+                            let type_name = iface.name.clone();
+                            type_to_service_map
+                                .entry(type_name)
+                                .or_insert_with(Vec::new)
+                                .push(service_name.clone());
                         }
                         graphql_parser::schema::TypeDefinition::InputObject(input) => {
-                            input.name.clone()
+                            let type_name = input.name.clone();
+                            type_to_service_map
+                                .entry(type_name)
+                                .or_insert_with(Vec::new)
+                                .push(service_name.clone());
                         }
                         graphql_parser::schema::TypeDefinition::Enum(enum_type) => {
-                            enum_type.name.clone()
+                            let type_name = enum_type.name.clone();
+                            type_to_service_map
+                                .entry(type_name)
+                                .or_insert_with(Vec::new)
+                                .push(service_name.clone());
                         }
                         graphql_parser::schema::TypeDefinition::Scalar(scalar) => {
-                            scalar.name.clone()
+                            let type_name = scalar.name.clone();
+                            type_to_service_map
+                                .entry(type_name)
+                                .or_insert_with(Vec::new)
+                                .push(service_name.clone());
                         }
                         graphql_parser::schema::TypeDefinition::Union(union_type) => {
-                            union_type.name.clone()
+                            let type_name = union_type.name.clone();
+                            type_to_service_map
+                                .entry(type_name)
+                                .or_insert_with(Vec::new)
+                                .push(service_name.clone());
                         }
-                    };
-
-                    // Add this service to the list of services that provide this type
-                    type_to_service_map
-                        .entry(type_name)
-                        .or_insert_with(Vec::new)
-                        .push(service_name.clone());
+                    }
                 }
             }
         }
 
+        println!("Type to service map: {:?}", type_to_service_map);
         Ok(FederatedSchema {
             services: services.clone(),
             type_to_service_map,
@@ -84,7 +117,6 @@ impl SchemaRegistry for InMemorySchemaRegistry {
         let mut services = self.services.write().await;
         services.insert(service.name.clone(), service);
 
-        // Invalidate cached schema
         let mut federated_schema = self.federated_schema.write().await;
         *federated_schema = None;
 
@@ -92,28 +124,18 @@ impl SchemaRegistry for InMemorySchemaRegistry {
     }
 
     async fn get_schema(&self) -> Result<FederatedSchema, String> {
-        // Check if we have a cached schema
         let cached_schema = self.federated_schema.read().await;
         if let Some(schema) = &*cached_schema {
             return Ok(schema.clone());
         }
         drop(cached_schema);
 
-        // Build a new schema
         let services = self.services.read().await;
         let schema = self.build_federated_schema(&services).await?;
 
-        // Cache the schema
         let mut federated_schema = self.federated_schema.write().await;
         *federated_schema = Some(schema.clone());
 
         Ok(schema)
-    }
-
-    async fn refresh_schemas(&mut self) -> Result<(), String> {
-        // Invalidate cached schema to force rebuild on next get_schema call
-        let mut federated_schema = self.federated_schema.write().await;
-        *federated_schema = None;
-        Ok(())
     }
 }
