@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use futures::{FutureExt, future::try_join_all};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 
 use crate::{FederatedSchema, QueryPlan};
 
@@ -10,6 +11,7 @@ pub trait QueryExecutor: Send + Sync {
         &self,
         plan: QueryPlan,
         schema: &FederatedSchema,
+        auth_headers: Option<HashMap<String, String>>,
     ) -> Result<Value, String>;
 }
 
@@ -27,6 +29,7 @@ impl QueryExecutor for HttpQueryExecutor {
         &self,
         query_plan: QueryPlan,
         schema: &FederatedSchema,
+        auth_headers: Option<HashMap<String, String>>,
     ) -> Result<Value, String> {
         let client = reqwest::Client::new();
 
@@ -55,13 +58,19 @@ impl QueryExecutor for HttpQueryExecutor {
                 println!("Query: {}", query);
                 println!("Variables for service: {}", variables);
 
-                let request = client
-                    .post(&service.url)
-                    .json(&json!({
-                        "query": query,
-                        "variables": variables
-                    }))
-                    .send();
+                let mut request_builder = client.post(&service.url).json(&json!({
+                    "query": query,
+                    "variables": variables
+                }));
+
+                if let Some(headers) = &auth_headers {
+                    for (name, value) in headers {
+                        request_builder = request_builder.header(name, value);
+                    }
+                    println!("Forwarding auth headers to service {}", service_name);
+                }
+
+                let request = request_builder.send();
 
                 async move {
                     let response = request

@@ -56,7 +56,7 @@ impl FederationGateway {
 
         let response = self
             .query_executor
-            .execute_plan(query_plan, &schema)
+            .execute_plan(query_plan, &schema, request.auth_headers)
             .await?;
 
         Ok(response)
