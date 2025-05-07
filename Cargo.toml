@@ -34,3 +34,8 @@ serde_yaml = "0.9"
 
 # Configuration
 clap = { version = "4.4", features = ["derive"] }
+
+[dev-dependencies]
+testcontainers = "0.24.0"
+serial_test = "2.0"
+pretty_assertions = "1.3"

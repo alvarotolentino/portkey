@@ -1,0 +1,14 @@
+{
+    "name": "product-service",
+    "version": "1.0.0",
+    "description": "GraphQL Product Service",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.js"
+    },
+    "dependencies": {
+        "@apollo/server": "^4.9.5",
+        "graphql": "^16.8.1",
+        "uuid": "^9.0.0"
+    }
+}

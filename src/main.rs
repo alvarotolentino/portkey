@@ -79,23 +79,23 @@ const GRAPHIQL_HTML: &str = r#"
   <script src="https://unpkg.com/react-dom@17.0.2/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/graphiql@1.5.0/graphiql.min.js"></script>
   <script>
-   
+
     const token = localStorage.getItem('auth_token') || '';
 
-   
+
     function graphQLFetcher(graphQLParams) {
       return fetch('/graphql', {
         method: 'post',
         headers: {
           'Content-Type': 'application/json',
-         
+
           'Authorization': token ? `Bearer ${token}` : '',
         },
         body: JSON.stringify(graphQLParams),
       }).then(response => response.json());
     }
 
-   
+
     ReactDOM.render(
       React.createElement(GraphiQL, { fetcher: graphQLFetcher }),
       document.getElementById('graphiql')
